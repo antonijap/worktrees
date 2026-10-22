@@ -33,8 +33,16 @@ enum Shell {
         var ok: Bool { status == 0 }
     }
 
+    /// A stand-in for gh that answers from canned data, so nothing reaches GitHub. Set by tests,
+    /// and read from TestMode for the test copy of the app and the bare executable.
+    nonisolated(unsafe) static var ghExecutable: String? = TestMode.fakeGh
+    /// Added to every child's environment. Tests use it to keep the user's git config out.
+    nonisolated(unsafe) static var extraEnvironment: [String: String] = TestMode.gitEnvironment
+
     // git and gh queue separately: a long scan must not hold up PR lookups, or the reverse.
-    private static let gitLimiter = Limiter(4)
+    /// Half the cores, between 4 and 8: 1,000 worktrees scan in half the time on a big Mac
+    /// without starving a small one.
+    private static let gitLimiter = Limiter(min(8, max(4, ProcessInfo.processInfo.activeProcessorCount / 2)))
     private static let ghLimiter = Limiter(4)
 
     // Apps launched from Finder get a bare PATH, so add the Homebrew locations where git and gh live.
@@ -107,9 +115,18 @@ enum Shell {
 
     private static func runBlocking(_ tool: String, _ args: [String], in dir: String?, refreshIndex: Bool) -> Result {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [tool] + (tool == "git" ? gitGuards : []) + args
-        var env = environment
+        if tool == "gh", ghExecutable == nil, TestMode.on {
+            // Never the real gh from a test or the test copy, even from work left running.
+            return Result(status: 127, out: "", err: "gh is blocked in test mode")
+        }
+        if tool == "gh", let fake = ghExecutable {
+            process.executableURL = URL(fileURLWithPath: fake)
+            process.arguments = args
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [tool] + (tool == "git" ? gitGuards : []) + args
+        }
+        var env = environment.merging(extraEnvironment) { _, extra in extra }
         if refreshIndex { env["GIT_OPTIONAL_LOCKS"] = "1" }
         process.environment = env
         if let dir { process.currentDirectoryURL = URL(fileURLWithPath: dir) }

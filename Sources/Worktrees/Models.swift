@@ -270,6 +270,9 @@ struct Worktree: Identifiable, Hashable, Sendable {
     let isPrunable: Bool
     /// The tool that made this worktree, read off its path and branch. Never for a main checkout.
     let creator: Creator?
+    /// Settings hides this tool's tag. Stored, not read live, so a change to the setting is a
+    /// change to the data and every row showing the tag redraws.
+    var creatorHidden: Bool
     var status: LocalStatus?
     var lastCommit: Commit?
     var pullRequest: PullRequest?
@@ -296,7 +299,13 @@ struct Worktree: Identifiable, Hashable, Sendable {
         self.isLocked = isLocked
         self.isPrunable = isPrunable
         creator = isMain ? nil : Creator(path: path, branch: branch)
+        creatorHidden = creator.map { Prefs.hiddenTools.contains($0.slug) } ?? false
     }
+}
+
+extension Worktree {
+    /// The creator tag to show, unless Settings hides that tool's tag.
+    var shownCreator: Creator? { creatorHidden ? nil : creator }
 }
 
 /// The tool that made a worktree. Shown as a quiet tag so you can tell an agent's checkout

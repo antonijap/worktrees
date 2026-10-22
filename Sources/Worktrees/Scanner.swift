@@ -1,18 +1,21 @@
 import Foundation
 
 enum Scanner {
-    private static let skippedFolders: Set<String> = [
-        "node_modules", "Pods", "DerivedData", "build", "dist", "vendor", "Carthage", "target", "venv", "Library",
-    ]
-
     /// Walks `root` and returns the main checkout path of every repository found.
     /// A linked worktree (where `.git` is a file) resolves to its main repository,
     /// so each repository shows up once and `git worktree list` fills in the rest.
-    static func findRepos(root: URL, maxDepth: Int = 4) -> [String] {
+    static func findRepos(root: URL, maxDepth: Int = Prefs.scanDepth, skipping skippedFolders: Set<String> = Prefs.skippedFolders,
+                          home: URL = FolderFinder.home) -> [String] {
         var found = Set<String>()
         let fm = FileManager.default
+        // The home folder is recognised by its file identity, not its path, so ~ reached as
+        // /Users/<me>, through a symlink or a firmlinked path is still home.
+        func identity(_ url: URL) -> String? {
+            (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier.map { "\($0)" }
+        }
+        let homeID = identity(home)
 
-        func walk(_ url: URL, depth: Int) {
+        func walk(_ url: URL, depth: Int, isHome: Bool) {
             let gitURL = url.appendingPathComponent(".git")
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: gitURL.path, isDirectory: &isDir) {
@@ -27,17 +30,21 @@ enum Scanner {
 
             let children = (try? fm.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceIdentifierKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             )) ?? []
-            for child in children where !skippedFolders.contains(child.lastPathComponent) {
-                let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            // Straight under the home folder, the folders macOS guards with a permission prompt
+            // are left alone, so adding ~ (or /Users) doesn't set off a string of prompts.
+            let guarded = isHome ? FolderFinder.protected : []
+            for child in children where !skippedFolders.contains(child.lastPathComponent) && !guarded.contains(child.lastPathComponent) {
+                let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceIdentifierKey])
                 guard values?.isDirectory == true, values?.isSymbolicLink != true else { continue }
-                walk(child, depth: depth + 1)
+                let childIsHome = homeID != nil && values?.fileResourceIdentifier.map { "\($0)" } == homeID
+                walk(child, depth: depth + 1, isHome: childIsHome)
             }
         }
 
-        walk(root, depth: 0)
+        walk(root, depth: 0, isHome: homeID != nil && identity(root) == homeID)
         return found.sorted()
     }
 

@@ -218,12 +218,25 @@ struct StatusFooter: View {
                         .id(store.noticeIcon)
                         .motionTransition(.opacity.combined(with: .offset(y: 4)).animation(.easeOut(duration: 0.2)),
                                           reduced: .opacity.animation(Motion.fade))
+                } else if let message = store.gitStatus.message {
+                    Text(verbatim: message).foregroundStyle(Theme.warning)
                 } else if let note = store.githubNote {
                     Text(verbatim: note).foregroundStyle(Theme.warning)
                 } else if let scanned = store.lastScan {
                     Text(verbatim: "\(store.repos.count) repos in \(store.rootsSummary), scanned \(shortAge(scanned, now: context.date))")
                 }
                 Spacer(minLength: 0)
+                // At the far end, so it never covers a warning or the scan line.
+                if let update = store.availableUpdate {
+                    Button {
+                        Open.url(update.url)
+                    } label: {
+                        Text(verbatim: "Worktrees \(update.version) is out").foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Opens the release on GitHub")
+                    .fixedSize()
+                }
             }
             .font(Font13.small)
             .foregroundStyle(Theme.muted)
@@ -324,7 +337,7 @@ struct WorktreeListRow: View {
         if worktree.isMain { parts.append(.init(text: "main checkout", priority: MetaLine.medium)) }
         if let ticket = worktree.branchName.ticket { parts.append(.init(text: ticket, priority: MetaLine.medium)) }
         if let pr = worktree.pullRequest { parts.append(.init(text: "#\(pr.number)", priority: MetaLine.high)) }
-        if let creator = worktree.creator { parts.append(.init(text: creator.name, priority: MetaLine.low, isCreator: true)) }
+        if let creator = worktree.shownCreator { parts.append(.init(text: creator.name, priority: MetaLine.low, isCreator: true)) }
         if let commit = worktree.lastCommit { parts.append(.init(text: shortAge(commit.date), priority: MetaLine.high)) }
         return parts
     }
@@ -731,7 +744,7 @@ struct WorktreeDetailView: View {
                     .fixedSize()
                 }
                 if let ticket = worktree.branchName.ticket { TicketPill(text: ticket).fixedSize() }
-                if let creator = worktree.creator {
+                if let creator = worktree.shownCreator {
                     Text(verbatim: creator.name)
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
@@ -1570,7 +1583,9 @@ struct DeleteConfirmation: ViewModifier {
     }
 
     private var deleteMessage: String {
-        var lines = ["Removes the folder \(worktree.path.abbreviatingHome)."]
+        var lines = [Prefs.trashOnDelete
+            ? "Moves the folder \(worktree.path.abbreviatingHome) to the Trash."
+            : "Removes the folder \(worktree.path.abbreviatingHome)."]
         if let branch = worktree.branch {
             let pushed = worktree.status?.upstream != nil || worktree.pullRequest != nil
             lines.append("The branch \(branch) stays\(pushed ? ", locally and on GitHub" : "").")

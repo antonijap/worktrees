@@ -8,6 +8,7 @@ struct WorktreesApp: App {
     @AppStorage(sidebarCollapsedKey) private var sidebarCollapsed = false
     @AppStorage(detailCollapsedKey) private var detailCollapsed = false
     @AppStorage(Appearance.key) private var appearance = Appearance.system
+    @AppStorage(Prefs.Key.menuBarIcon) private var menuBarIcon = false
 
     init() {
         if CommandLine.arguments.contains("--dump") { Dump.runAndExit() }
@@ -28,6 +29,14 @@ struct WorktreesApp: App {
         // the safe area off before it is first laid out (see MainWindow).
         Settings {
             SettingsView()
+                .environment(store)
+        }
+        // Sample runs never put an icon in the real menu bar.
+        MenuBarExtra(isInserted: Binding(get: { menuBarIcon && !DemoData.isOn }, set: { menuBarIcon = $0 })) {
+            MenuBarMenu(showWindow: { delegate.showWindow() })
+                .environment(store)
+        } label: {
+            MenuBarLabel()
                 .environment(store)
         }
         .commands {
@@ -88,6 +97,7 @@ struct WorktreesApp: App {
 
                 Button("Tidy Up…") { store.openTidyUp() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .disabled(store.onboardingActive)
 
                 Button("Delete Worktree…") {
                     if let (_, wt) = store.selectedPair, !wt.isMain { store.confirmDeleteID = wt.id }
@@ -100,11 +110,28 @@ struct WorktreesApp: App {
 }
 
 /// Makes and keeps the one main window.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    /// The first-launch window, until Open Worktrees.
+    private var onboarding: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Appearance.apply()
+        Notifier.setUp()
+        if Onboarding.isNeeded() { showOnboarding() } else { makeMainWindow() }
+        // With no window scene of its own, SwiftUI opens the Settings window at launch.
+        // Nobody asked for it, so it goes again as soon as it appears.
+        DispatchQueue.main.async { Self.closeSettingsWindow() }
+    }
+
+    private static func closeSettingsWindow() {
+        for window in NSApplication.shared.windows where window.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" {
+            window.close()
+        }
+    }
+
+    private func makeMainWindow() {
         let window = MainWindow.make(
             content: ContentView().environment(Store.shared),
             title: DemoData.isOn ? "Worktrees (sample data)" : "Worktrees"
@@ -114,14 +141,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.window = window
     }
 
+    private func showOnboarding() {
+        let model = OnboardingModel(store: Store.shared)
+        let view = OnboardingView(model: model) { [weak self] in
+            model.finish()
+            self?.onboarding?.close()
+            self?.onboarding = nil
+            self?.makeMainWindow()
+        }
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 680, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        window.title = "Welcome to Worktrees"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: view.environment(Store.shared))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        onboarding = window
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showWindow()
         return true
     }
 
-    /// Brings the main window back, from closed or minimized.
+    /// Brings the main window back, from closed or minimized. From the menu bar the app may
+    /// not be active, so it comes to the front too.
     func showWindow() {
-        guard let window else { return }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        // Before onboarding is done, the welcome window is the one to come back.
+        guard let window else {
+            onboarding?.makeKeyAndOrderFront(nil)
+            return
+        }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
     }

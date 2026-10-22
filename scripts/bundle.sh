@@ -7,9 +7,13 @@ cd "$(dirname "$0")/.."
 swift build -c release
 
 APP=build/Worktrees.app
+# The one place the version lives; a release bumps it.
+VERSION=$(tr -d '[:space:]' < VERSION)
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Worktrees "$APP/Contents/MacOS/Worktrees"
+# The 3D icon the onboarding Welcome step shows.
+cp Sources/Worktrees/Resources/icon-3d.png "$APP/Contents/Resources/icon-3d.png"
 
 # App icon: draw at 1024px, scale to every iconset size, pack as .icns.
 ICONSET=build/AppIcon.iconset
@@ -21,7 +25,7 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -32,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleExecutable</key><string>Worktrees</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>

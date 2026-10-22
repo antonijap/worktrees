@@ -388,6 +388,10 @@ enum Font13 {
     static let label = Font.system(size: 11, weight: .semibold)
     /// Page and sheet titles.
     static let title = Font.system(size: 18, weight: .semibold)
+    /// Onboarding: a step's heading, the welcome title, and the line under it.
+    static let heading = Font.system(size: 20, weight: .semibold)
+    static let hero = Font.system(size: 22, weight: .semibold)
+    static let lead = Font.system(size: 14)
 }
 
 /// Copies text and tells the person it happened: a short tick, a VoiceOver announcement.

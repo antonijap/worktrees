@@ -58,7 +58,7 @@ enum Dump {
                     continue
                 }
                 if let slug = repo.githubRemote?.githubSlug, CommandLine.arguments.contains("--github") {
-                    let branches = repo.worktrees.compactMap(\.remoteBranch).filter { !GitHub.defaultBranches.contains($0) }
+                    let branches = repo.worktrees.compactMap(\.remoteBranch).filter { !Prefs.protectedBranches.contains($0) }
                     let lookups = await GitHub.pullRequests(slug: slug, branches: Array(Set(branches)))
                     for i in repo.worktrees.indices {
                         if let branch = repo.worktrees[i].remoteBranch, case .found(let pr)? = lookups[branch] {

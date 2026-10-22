@@ -10,8 +10,20 @@ final class Store {
 
     /// Folders to scan. Each can hold many projects (~/Code) or be a single repo.
     var roots: [URL] {
-        didSet { if !DemoData.isOn { UserDefaults.standard.set(roots.map(\.path), forKey: "roots") } }
+        didSet { if !DemoData.isOn, !isTesting, saveRoots, !onboardingActive { UserDefaults.standard.set(roots.map(\.path), forKey: "roots") } }
     }
+    @ObservationIgnored private var saveRoots = true
+    /// Until onboarding finishes, folder changes (from Settings too) are not saved, and commands
+    /// that need the main window are off.
+    var onboardingActive = false
+
+    /// Onboarding scans the folders picked so far without saving them.
+    func setRoots(_ urls: [URL], save: Bool) {
+        saveRoots = save
+        roots = urls
+        saveRoots = true
+    }
+    private var isTesting: Bool { Prefs.testStore != nil }
     var repos: [Repo] = []
     var isScanning = false
     var isLoadingGitHub = false
@@ -33,6 +45,34 @@ final class Store {
     /// Failed lookups per repo from the latest pass over it, for the status line.
     private var githubFailures: [String: Int] = [:]
     private var githubSignedInAt: Date?
+    /// A newer release than this build, once the daily check has found one.
+    var availableUpdate: UpdateCheck.Release?
+
+    /// Looks for a newer release at most once a day, after a GitHub pass found gh signed in.
+    /// A failed look counts as the day's look too, so a 404 or a rate limit isn't retried on
+    /// every pass. What it finds is kept, so the notice survives a relaunch.
+    func checkForUpdate(current: String? = UpdateCheck.current, now: Date = .now) async {
+        guard !DemoData.isOn, let defaults = Prefs.store else { return }
+        guard Prefs.checkForUpdates, let current else {
+            availableUpdate = nil
+            return
+        }
+        if availableUpdate == nil { availableUpdate = UpdateCheck.saved(in: defaults, newerThan: current) }
+        guard githubSignedIn == true else { return }
+        if let last = defaults.object(forKey: UpdateCheck.lastCheckKey) as? Date, now.timeIntervalSince(last) < UpdateCheck.interval { return }
+        defaults.set(now, forKey: UpdateCheck.lastCheckKey)
+        guard let latest = await UpdateCheck.latest() else { return }
+        UpdateCheck.save(latest, in: defaults)
+        availableUpdate = UpdateCheck.isNewer(latest.version, than: current) ? latest : nil
+    }
+
+    /// Whether git could run at the last scan. Without it no repo can be read.
+    var gitStatus: GitCheck.Status = .ready
+    /// Whether gh had a token at the last GitHub pass. nil until the first one.
+    var githubSignedIn: Bool?
+    /// Failing and merged, per PR URL, as last seen. A notification only goes out for a change
+    /// from a state seen before, so the first pass after launch stays quiet.
+    @ObservationIgnored private var prSeen: [String: (failing: Bool, merged: Bool)] = [:]
     private var githubRunning = false
     /// Repos a queued GitHub pass must cover; nil means all of them.
     private var githubQueuedScope: Set<String>? = []
@@ -116,10 +156,6 @@ final class Store {
     var sizes: [String: Int64] = [:]
     private var sizing: Set<String> = []
     private var sizeMeasuredAt: [String: Date] = [:]
-    /// A size older than this is measured again by the next scan that comes along. The old
-    /// number stays on screen until the new one lands. Measuring is the costliest thing the
-    /// app does (du walks every node_modules), so this is deliberately long.
-    nonisolated static let sizeMaxAge: TimeInterval = 60 * 60
 
     /// Worktrees being deleted. Hidden from scan results until git has forgotten them,
     /// so a scan that started before the delete can't bring the row back.
@@ -134,10 +170,40 @@ final class Store {
     private var refreshingRepos: Set<String> = []
     private var repoRefreshQueued: Set<String> = []
     private var watcher: RepoWatcher?
-    /// How often GitHub is asked again while the app is in use.
-    nonisolated static let githubRefreshInterval: TimeInterval = 5 * 60
+    /// Moves a folder to the Trash and returns where it went. Tests swap in a folder of their own.
+    nonisolated(unsafe) static var trash: (URL) throws -> URL? = { url in
+        if let folder = TestMode.trashFolder {
+            let dest = folder.appendingPathComponent(url.lastPathComponent)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: url, to: dest)
+            return dest
+        }
+        guard !TestMode.underTests else { throw CocoaError(.fileWriteNoPermission) }
+        var trashed: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
+        return trashed as URL?
+    }
+
+    /// How long a partial GitHub pass trusts the last sign-in check.
+    nonisolated static let githubSignInTrust: TimeInterval = 5 * 60
     /// True while the filter field has focus, so ⌘⌫ deletes text there instead of a worktree.
     var filterFocused = false
+
+    /// For tests: scans only `roots`, with no file watcher and no GitHub timer, and never
+    /// saves the folders.
+    init(testingRoots: [URL]) {
+        roots = testingRoots
+        prefsSeen = PrefsSnapshot()
+        // Only its own test's settings suite: a store left over from an earlier test must not
+        // react to a later test's writes.
+        let own = Prefs.testStore
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: own, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, own != nil, Prefs.testStore === own else { return }
+                self.prefsChanged()
+            }
+        }
+    }
 
     init() {
         if DemoData.isOn {
@@ -149,9 +215,17 @@ final class Store {
         } else if let legacy = UserDefaults.standard.string(forKey: "root") {
             // Earlier builds kept a single folder.
             roots = [URL(fileURLWithPath: legacy)]
+        } else if Onboarding.isNeeded() {
+            // Onboarding asks; nothing is scanned until folders are picked.
+            roots = []
         } else {
             let code = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code")
             roots = FileManager.default.fileExists(atPath: code.path) ? [code] : []
+        }
+        prefsSeen = PrefsSnapshot()
+        syncBackgroundActivity()
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.prefsChanged() }
         }
         watcher = RepoWatcher { [weak self] path in
             guard let self else { return }
@@ -160,8 +234,9 @@ final class Store {
         startGitHubTimer()
     }
 
-    /// Asks GitHub again every few minutes, but only while the app is in use. In the
-    /// background the data can wait; coming back to the front rescans anyway.
+    /// Asks GitHub again every few minutes (Settings picks how often, or never), only while the
+    /// app is in use unless Settings says to keep going in the background. Coming back to the
+    /// front rescans anyway.
     private func startGitHubTimer() {
         Task { [weak self] in
             while !Task.isCancelled {
@@ -169,12 +244,79 @@ final class Store {
                 guard let self else { return }
                 // Counted from the last full pass, so a scan that just asked GitHub resets the clock
                 // and waking from sleep doesn't fire on top of the activate rescan.
-                guard NSApplication.shared.isActive, !self.repos.isEmpty, !self.isScanning, !self.isLoadingGitHub,
-                      Date().timeIntervalSince(self.lastGitHub ?? .distantPast) >= Store.githubRefreshInterval
+                guard let interval = Prefs.githubRefreshInterval,
+                      NSApplication.shared.isActive || Prefs.githubInBackground,
+                      !self.repos.isEmpty, !self.isScanning, !self.isLoadingGitHub,
+                      Date().timeIntervalSince(self.lastGitHub ?? .distantPast) >= interval
                 else { continue }
                 await self.loadGitHub()
             }
         }
+    }
+
+    /// The settings that change what is on screen, as last acted on. UserDefaults reports every
+    /// change (column widths too), so only a real change to one of these does anything.
+    private struct PrefsSnapshot: Equatable {
+        var scanDepth = Prefs.scanDepth
+        var skipped = Prefs.skippedFolders
+        var protected = Prefs.protectedBranches
+        var display = [String(Prefs.staleDays), String(Prefs.preselectStale), String(Prefs.trashOnDelete),
+                       String(Prefs.checkForUpdates)] + Prefs.hiddenTools.sorted()
+    }
+    @ObservationIgnored private var prefsSeen: PrefsSnapshot?
+    @ObservationIgnored private var backgroundActivity: NSObjectProtocol?
+
+    private func prefsChanged() {
+        guard !DemoData.isOn else { return }
+        syncBackgroundActivity()
+        let now = PrefsSnapshot()
+        guard let before = prefsSeen, now != before else { return }
+        prefsSeen = now
+        if now.scanDepth != before.scanDepth || now.skipped != before.skipped {
+            Task { await refresh() }
+        } else if now.protected != before.protected {
+            // Branches taken off the list need a lookup; the pass also drops the PR of ones added.
+            Task { await loadGitHub() }
+        }
+        if !Prefs.checkForUpdates { availableUpdate = nil }
+        let hidden = Prefs.hiddenTools
+        var updated = repos
+        for r in updated.indices {
+            for w in updated[r].worktrees.indices {
+                let wt = updated[r].worktrees[w]
+                updated[r].worktrees[w].creatorHidden = wt.creator.map { hidden.contains($0.slug) } ?? false
+            }
+        }
+        repos = updated
+        // The Tidy up sheet reads stale days and the Trash setting as it draws.
+        prefsVersion += 1
+    }
+
+    /// Goes up when a setting that changes what is drawn changes. Views that read settings as
+    /// they draw read this, so they draw again.
+    var prefsVersion = 0
+
+    /// Background refresh only works if App Nap lets the timer run.
+    private func syncBackgroundActivity() {
+        let wanted = Prefs.githubInBackground && Prefs.githubRefreshInterval != nil
+        if wanted, backgroundActivity == nil {
+            backgroundActivity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "Checking GitHub in the background"
+            )
+        } else if !wanted, let activity = backgroundActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            backgroundActivity = nil
+        }
+    }
+
+    /// Scanning, re-reading a repo or asking GitHub. Tests wait for this to settle.
+    var isBusy: Bool { isScanning || githubRunning || !refreshingRepos.isEmpty }
+
+    /// Repos found under one scanned folder, for Settings.
+    func repoCount(in root: URL) -> Int {
+        let path = root.standardizedFileURL.path
+        return repoRoots.values.filter { $0.standardizedFileURL.path == path }.count
     }
 
     /// Adds folders, skipping ones already listed, then rescans.
@@ -212,6 +354,7 @@ final class Store {
     func refresh() async {
         if DemoData.isOn {
             GitHub.viewer = DemoData.viewer
+            githubSignedIn = true
             repos = DemoData.repos()
             DemoData.seedLogs()
             for r in repos.indices { repos[r].worktrees.removeAll { pendingDeletes.contains($0.id) } }
@@ -228,18 +371,28 @@ final class Store {
             return
         }
         isScanning = true
+        // Checked off the main thread (it runs xcode-select and git once). Without a working git
+        // nothing is scanned: on a fresh Mac, running git would open the tools installer.
+        gitStatus = await Task.detached(priority: .userInitiated) { GitCheck.status }.value
+        guard gitStatus == .ready else {
+            isScanning = false
+            lastScan = Date()
+            return
+        }
 
         progress = "Finding repositories…"
         // Deletes that finished before this scan started are safe to stop hiding afterwards.
         let settledAtStart = settledDeletes
         let roots = self.roots
+        let depth = Prefs.scanDepth
+        let skipped = Prefs.skippedFolders
         // Repo path paired with the scanned folder it was found under; a repo reachable
         // from two folders is listed once.
         let found: [(path: String, root: URL)] = await Task.detached(priority: .userInitiated) {
             var seen = Set<String>()
             var result: [(path: String, root: URL)] = []
             for root in roots {
-                for path in Scanner.findRepos(root: root) where seen.insert(path).inserted {
+                for path in Scanner.findRepos(root: root, maxDepth: depth, skipping: skipped) where seen.insert(path).inserted {
                     result.append((path, root))
                 }
             }
@@ -385,17 +538,19 @@ final class Store {
         } while githubQueued
         isLoadingGitHub = false
         githubRunning = false
+        await checkForUpdate()
     }
 
     private func loadGitHubOnce(only repoIDs: Set<String>?) async {
         // gh auth status hits the network; a partial pass trusts a recent full one.
         let signedIn: Bool
-        if let at = githubSignedInAt, repoIDs != nil, Date().timeIntervalSince(at) < Store.githubRefreshInterval {
+        if let at = githubSignedInAt, repoIDs != nil, Date().timeIntervalSince(at) < Store.githubSignInTrust {
             signedIn = true
         } else {
             signedIn = await GitHub.signedIn()
             githubSignedInAt = signedIn ? Date() : nil
         }
+        githubSignedIn = signedIn
         guard signedIn else {
             githubNote = "GitHub status is off: gh isn't signed in. Run `gh auth login`, then refresh."
             return
@@ -416,11 +571,13 @@ final class Store {
             let branch: String
         }
 
+        // Protected branches never have a PR of their own, so they are not looked up.
+        let protected = Prefs.protectedBranches
         let jobs: [Job] = repos.flatMap { repo -> [Job] in
             if let repoIDs, !repoIDs.contains(repo.id) { return [] }
             guard let slug = repo.githubRemote?.githubSlug else { return [] }
             return repo.worktrees.compactMap { wt in
-                guard let branch = wt.remoteBranch, !GitHub.defaultBranches.contains(branch) else { return nil }
+                guard let branch = wt.remoteBranch, !protected.contains(branch) else { return nil }
                 return Job(repoID: repo.id, worktreeID: wt.id, slug: slug, branch: branch)
             }
         }
@@ -438,12 +595,22 @@ final class Store {
             var results: [(Job, GitHub.Lookup)] = []
             for await part in group { results += part }
             var updated = repos
+            // A branch on the protected list has no lookup any more, so an old PR must not linger.
+            for r in updated.indices where repoIDs?.contains(updated[r].id) ?? true {
+                for w in updated[r].worktrees.indices {
+                    if let branch = updated[r].worktrees[w].remoteBranch, protected.contains(branch) {
+                        updated[r].worktrees[w].pullRequest = nil
+                    }
+                }
+            }
             for (job, lookup) in results {
                 guard let r = updated.firstIndex(where: { $0.id == job.repoID }),
                       let w = updated[r].worktrees.firstIndex(where: { $0.id == job.worktreeID })
                 else { continue }
                 switch lookup {
-                case .found(let pr): updated[r].worktrees[w].pullRequest = pr
+                case .found(let pr):
+                    updated[r].worktrees[w].pullRequest = pr
+                    noteChange(pr, repo: updated[r].name)
                 case .none: updated[r].worktrees[w].pullRequest = nil
                 case .failed: githubFailures[job.repoID, default: 0] += 1
                 }
@@ -452,16 +619,29 @@ final class Store {
         }
     }
 
+    private func noteChange(_ pr: PullRequest, repo: String) {
+        let now = (failing: pr.checks == .failing, merged: pr.state == "MERGED")
+        defer { prSeen[pr.url] = now }
+        guard let before = prSeen[pr.url] else { return }
+        if now.failing, !before.failing, Prefs.notifyChecksFailed {
+            Notifier.post(title: "Checks failed", body: "#\(pr.number) \(pr.title) in \(repo)", url: pr.url)
+        }
+        if now.merged, !before.merged, Prefs.notifyMerged {
+            Notifier.post(title: "Pull request merged", body: "#\(pr.number) \(pr.title) in \(repo). Its worktree can go.", url: pr.url)
+        }
+    }
+
     /// Removes a linked worktree. The row goes at once; the disk work follows in the background.
     /// The branch is kept. On failure `deleteError` is set and the folder is rescanned.
     func deleteWorktree(_ wt: Worktree, in repo: Repo) {
         let name = URL(fileURLWithPath: wt.path).lastPathComponent
         Task {
+            let trash = Prefs.trashOnDelete
             let failures = await deleteWorktrees([wt], in: repo)
             if let error = failures.first?.error {
                 deleteError = error
             } else {
-                show("Deleted \(name). Branch kept.")
+                show(trash ? "Moved \(name) to the Trash. Branch kept." : "Deleted \(name). Branch kept.")
             }
         }
     }
@@ -501,12 +681,16 @@ final class Store {
 
     /// Measures folders that were never measured, or not for a while, a couple at a time
     /// off the main thread. Safe to call often: work in flight is not repeated.
-    func loadSizes(for paths: [String], maxAge: TimeInterval = Store.sizeMaxAge) async {
+    /// A size older than `maxAge` is measured again; the old number stays on screen until the
+    /// new one lands. nil (Settings: Never) measures each folder once per launch. Measuring is the
+    /// costliest thing the app does (du walks every node_modules), so the default is an hour.
+    func loadSizes(for paths: [String], maxAge: TimeInterval? = Prefs.sizeMaxAge) async {
         guard !DemoData.isOn else { return }
         let now = Date()
         let todo = paths.filter { path in
             guard !sizing.contains(path), !pendingDeletes.contains(path) else { return false }
             guard let measured = sizeMeasuredAt[path] else { return true }
+            guard let maxAge else { return false }
             return now.timeIntervalSince(measured) > maxAge
         }
         guard !todo.isEmpty else { return }
@@ -539,6 +723,7 @@ final class Store {
         let n = candidates.count
         let bytes = candidates.compactMap { sizes[$0.worktree.id] }.reduce(0, +)
         let byRepo = Dictionary(grouping: candidates, by: \.repo.id)
+        let trash = Prefs.trashOnDelete
         show("Deleting \(n) worktree\(n == 1 ? "" : "s")…")
         Task {
             var failures: [(worktree: Worktree, error: String)] = []
@@ -551,9 +736,15 @@ final class Store {
                 for await part in group { failures += part }
             }
             let done = n - failures.count
-            // "Up to": du counts clones and hard links in full, so the real gain can be less.
-            let space = bytes > 0 && failures.isEmpty ? ", up to \(formatBytes(bytes)) freed" : ""
-            show("Deleted \(done) worktree\(done == 1 ? "" : "s")\(space). Branches kept.", icon: failures.isEmpty ? .check : nil)
+            let count = "\(done) worktree\(done == 1 ? "" : "s")"
+            if trash {
+                // Nothing is freed until the Trash is emptied.
+                show("Moved \(count) to the Trash. Branches kept.", icon: failures.isEmpty ? .check : nil)
+            } else {
+                // "Up to": du counts clones and hard links in full, so the real gain can be less.
+                let space = bytes > 0 && failures.isEmpty ? ", up to \(formatBytes(bytes)) freed" : ""
+                show("Deleted \(count)\(space). Branches kept.", icon: failures.isEmpty ? .check : nil)
+            }
             if !failures.isEmpty {
                 deleteError = failures.map { "\(URL(fileURLWithPath: $0.worktree.path).lastPathComponent): \($0.error)" }
                     .joined(separator: "\n")
@@ -566,15 +757,19 @@ final class Store {
         notice = message
         noticeIcon = icon
         announce(message)
-        Task {
+        Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            if notice == message { notice = nil; noticeIcon = nil }
+            guard let self, self.notice == message else { return }
+            self.notice = nil
+            self.noticeIcon = nil
         }
     }
 
     func announce(_ message: String) {
+        // No app object under tests.
+        guard let app = NSApp else { return }
         NSAccessibility.post(
-            element: NSApp.mainWindow as Any,
+            element: app.mainWindow as Any,
             notification: .announcementRequested,
             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue]
         )
@@ -593,6 +788,8 @@ final class Store {
     /// Renames the folder aside (instant on the same volume), lets git forget it with
     /// `worktree prune`, then deletes the renamed folder off the main thread.
     /// Faster than `git worktree remove`, which deletes every file before returning.
+    /// With Move to Trash on, the folder goes to the Trash under its own name instead, so
+    /// Put Back restores it where it was.
     private nonisolated static func removeFromDisk(_ wt: Worktree, repoPath: String, roots: [String], others: [String]) async -> String? {
         let fm = FileManager.default
 
@@ -606,6 +803,22 @@ final class Store {
         }
 
         let url = URL(fileURLWithPath: wt.path)
+        if Prefs.trashOnDelete {
+            let trashed: URL?
+            do {
+                trashed = try Store.trash(url)
+            } catch {
+                return "Couldn't move \(wt.path.abbreviatingHome) to the Trash: \(error.localizedDescription)"
+            }
+            if let failure = await forget(wt, repoPath: repoPath) {
+                // Git still knows the worktree, so the folder comes back out of the Trash.
+                guard let trashed, (try? fm.moveItem(at: trashed, to: url)) != nil else {
+                    return failure + " The folder is still in the Trash."
+                }
+                return failure
+            }
+            return nil
+        }
         // Hidden name, so a rescan never picks it up while it's being deleted.
         let aside = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).deleting-\(UUID().uuidString.prefix(8))")

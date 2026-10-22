@@ -21,6 +21,8 @@ struct TidyUpView: View {
     }
 
     var body: some View {
+        // Stale days and the Trash setting are read as this draws.
+        let _ = store.prefsVersion
         let candidates = self.candidates
         let chosen = candidates.filter { checked.contains($0.id) }
         VStack(alignment: .leading, spacing: 0) {
@@ -29,7 +31,9 @@ struct TidyUpView: View {
                     .font(Font13.title)
                     .foregroundStyle(Theme.text)
                     .accessibilityAddTraits(.isHeader)
-                Text("Worktrees that are clean, pushed and done with. Deleting removes the folder, the branch stays.")
+                Text(Prefs.trashOnDelete
+                     ? "Worktrees that are clean, pushed and done with. Deleting moves the folder to the Trash, the branch stays."
+                     : "Worktrees that are clean, pushed and done with. Deleting removes the folder, the branch stays.")
                     .font(Font13.small)
                     .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -141,7 +145,7 @@ struct TidyUpView: View {
         var meta = [MetaLine.Item(text: c.repo.name, priority: MetaLine.low)]
         if let ticket = wt.branchName.ticket { meta.append(.init(text: ticket, priority: MetaLine.medium)) }
         if let pr = wt.pullRequest { meta.append(.init(text: "#\(pr.number)", priority: MetaLine.high)) }
-        if let creator = wt.creator { meta.append(.init(text: creator.name, priority: MetaLine.low, isCreator: true)) }
+        if let creator = wt.shownCreator { meta.append(.init(text: creator.name, priority: MetaLine.low, isCreator: true)) }
         if let commit = wt.lastCommit { meta.append(.init(text: shortAge(commit.date), priority: MetaLine.high)) }
         let size = store.sizes[wt.path]
         let isOn = Binding(
@@ -223,14 +227,17 @@ struct TidyUpView: View {
         let measured = chosen.compactMap { store.sizes[$0.worktree.path] }
         let total = measured.reduce(0, +)
         var lines: [String] = []
+        let trash = Prefs.trashOnDelete
+        let verb = trash ? "Moves " : "Removes "
+        let toTrash = trash ? " to the Trash" : ""
         if chosen.count <= 3 {
-            lines.append("Removes " + chosen.map { $0.worktree.path.abbreviatingHome }.joined(separator: ", ") + ".")
+            lines.append(verb + chosen.map { $0.worktree.path.abbreviatingHome }.joined(separator: ", ") + toTrash + ".")
         } else {
-            lines.append("Removes \(chosen.count) worktree folders.")
+            lines.append(verb + "\(chosen.count) worktree folders" + toTrash + ".")
         }
         if total > 0 {
             // du counts clones and hard links in full, so the real gain can be smaller.
-            lines.append("Frees up to \(formatBytes(total)) of disk space\(measured.count < chosen.count ? ", not every folder is measured yet" : "").")
+            lines.append("Frees up to \(formatBytes(total)) of disk space\(trash ? " once you empty the Trash" : "")\(measured.count < chosen.count ? ", not every folder is measured yet" : "").")
         }
         lines.append("Every branch stays, locally and on GitHub. Nothing uncommitted or unpushed is in this list.")
         lines.append("Ignored files that git doesn't track, such as .env, go with the folders.")

@@ -28,7 +28,7 @@ enum Snapshot {
             args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
         }
         guard let out = value("--snapshot"), out.hasSuffix(".png") else {
-            FileHandle.standardError.write(Data("usage: Worktrees --snapshot <out.png> [--dark] [--select <path>] [--folder <name>] [--size WxH] [--tidy] [--reveal] [--collapsed]\n".utf8))
+            FileHandle.standardError.write(Data("usage: Worktrees --snapshot <out.png> [--dark] [--select <path>] [--folder <name>] [--size WxH] [--tidy] [--settings <page>] [--reveal] [--collapsed]\n".utf8))
             exit(2)
         }
         let dark = args.contains("--dark")
@@ -63,13 +63,25 @@ enum Snapshot {
             guard ["on", "off", "auto"].contains(wrap) else { fail("--wrap wants on, off or auto") }
             defaults[DiffPanel.wrapKey] = wrap
         }
-        UserDefaults.standard.setVolatileDomain(defaults, forName: UserDefaults.argumentDomain)
+        // `--settings <page>`: the Settings window on one page (general, folders, tidy, github,
+        // tools, advanced).
+        let settingsPane = value("--settings")
+        if let settingsPane {
+            guard SettingsPane(rawValue: settingsPane) != nil else {
+                fail("--settings wants one of \(SettingsPane.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            defaults["settingsPane"] = settingsPane
+        }
+        // Settings given on the command line (`-staleDays 7`) stay; the ones above are added.
+        let given = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        UserDefaults.standard.setVolatileDomain(given.merging(defaults) { _, ours in ours }, forName: UserDefaults.argumentDomain)
         NSApplication.shared.setActivationPolicy(.prohibited)
         NSApplication.shared.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
 
         let store = Store()
         Task { await store.refresh() }
-        wait(until: { DemoData.isOn ? store.lastGitHub != nil : store.lastFullScan != nil }, atMost: 60)
+        // A real folder also waits for its GitHub pass, which follows the scan straight away.
+        wait(until: { DemoData.isOn ? store.lastGitHub != nil : store.lastFullScan != nil && !store.isLoadingGitHub }, atMost: 60)
 
         // `--tidy-empty`: nothing to clean, Tidy up pressed: the window with its All tidy note.
         if args.contains("--tidy-empty") { store.repos = []; store.openTidyUp() }
@@ -85,13 +97,35 @@ enum Snapshot {
             folder = .repo(repo.id)
         }
 
-        let tidy = args.contains("--tidy")
-        let root: AnyView = tidy
+        // `--onboarding <step>`: the first-launch window on one step (welcome, folders, github,
+        // ready), with sample folders and gh signed out.
+        let onboardingStep = value("--onboarding")
+        var onboardingModel: OnboardingModel?
+        if let onboardingStep {
+            let steps: [String: OnboardingModel.Step] = ["welcome": .welcome, "folders": .folders, "github": .github, "ready": .ready]
+            guard let step = steps[onboardingStep] else { fail("--onboarding wants welcome, folders, github or ready") }
+            let model = OnboardingModel(store: store, home: URL(fileURLWithPath: DemoData.home))
+            model.step = step
+            model.suggestions = [
+                FolderSuggestion(url: URL(fileURLWithPath: DemoData.home + "/Code"), repoCount: 5, picked: true),
+                FolderSuggestion(url: URL(fileURLWithPath: DemoData.home + "/Projects"), repoCount: 3, picked: true),
+                FolderSuggestion(url: URL(fileURLWithPath: DemoData.home + "/src"), repoCount: 1, picked: false),
+            ]
+            model.github = .signedOut(path: "/opt/homebrew/bin/gh")
+            // `--no-git`: the Folders step as it looks on a Mac without git.
+            if args.contains("--no-git") { model.gitStatus = .missing }
+            onboardingModel = model
+        }
+        let tidy = args.contains("--tidy") || settingsPane != nil || onboardingModel != nil
+        let root: AnyView = onboardingModel.map { AnyView(OnboardingView(model: $0) {}.environment(store)) }
+            ?? (settingsPane != nil
+            ? AnyView(SettingsView().environment(store))
+            : tidy
             ? AnyView(TidyUpView().environment(store))
             : value("--resize") != nil
                 // Free to follow the window, so a resize lays out again.
                 ? AnyView(ContentView(folder: folder).environment(store).frame(maxWidth: .infinity, maxHeight: .infinity))
-                : AnyView(ContentView(folder: folder).environment(store).frame(width: size.width, height: size.height))
+                : AnyView(ContentView(folder: folder).environment(store).frame(width: size.width, height: size.height)))
         // `--chrome` uses the app's own window (hidden title bar over the content, traffic
         // lights in the corner), for checking what a click near the corner reaches.
         let chrome = args.contains("--chrome") && !tidy

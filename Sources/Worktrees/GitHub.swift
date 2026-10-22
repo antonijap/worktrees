@@ -1,9 +1,6 @@
 import Foundation
 
 enum GitHub {
-    /// Branches that never have a PR of their own, so skip the lookup.
-    static let defaultBranches: Set<String> = ["main", "master", "develop", "dev", "trunk"]
-
     /// A stored token means signed in. `gh auth token` reads it locally; `gh auth status` would
     /// go to the network to check it.
     static func signedIn() async -> Bool {
@@ -65,7 +62,7 @@ enum GitHub {
                 // An open PR wins over a newer closed one from a reused branch name.
                 let nodes = repo[name]?.nodes.compactMap(\.value) ?? []
                 let pick = nodes.first { $0.state == "OPEN" } ?? nodes.first
-                result[branch] = pick.map { .found($0.pullRequest) } ?? .none
+                result[branch] = pick.map { .found($0.pullRequest) } ?? Lookup.none
             }
         }
         return result

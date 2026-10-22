@@ -9,11 +9,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
+    timeout-minutes: 30
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # The same Swift as development, so a newer language feature can't break only here.
+      - name: Toolchain
+        run: |
+          # Newest release Xcode on the image; betas are skipped.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -1)"
+          swift --version
       - name: Build
         run: swift build
       - name: Lint
         run: scripts/lint.sh
+      # Throwaway fixture repos and a fake gh; never the network. One at a time: the tests share
+      # process-wide hooks.
+      - name: Test
+        run: swift test --no-parallel

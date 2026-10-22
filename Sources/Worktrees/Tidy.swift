@@ -10,7 +10,7 @@ enum TidyReason: Int, Comparable, CaseIterable {
         switch self {
         case .merged: "Merged"
         case .closed: "PR closed"
-        case .stale: "No commits in 30 days"
+        case .stale: "No commits in \(Prefs.staleDays) days"
         }
     }
 }
@@ -20,7 +20,7 @@ struct TidyCandidate: Identifiable, Hashable {
     let worktree: Worktree
     let reason: TidyReason
     /// Ticked when the sheet opens. Merged and closed are safe bets, as long as git could
-    /// confirm there is nothing unpushed. Stale ones get a look first.
+    /// confirm there is nothing unpushed. Stale ones get a look first, unless Settings says otherwise.
     let preselected: Bool
 
     var id: String { worktree.id }
@@ -30,13 +30,13 @@ struct TidyCandidate: Identifiable, Hashable {
 }
 
 extension TidyCandidate {
-    static let staleAfter: TimeInterval = 30 * 86_400
-
-    /// Never a main checkout, a locked worktree, a default branch, or anything with
+    /// Never a main checkout, a locked worktree, a protected branch, or anything with
     /// uncommitted files, unpushed commits or an open PR.
-    static func reason(for wt: Worktree, now: Date = .now) -> TidyReason? {
+    /// The settings are read once per call by default; `candidates` reads them once for all.
+    static func reason(for wt: Worktree, now: Date = .now,
+                       protected: Set<String> = Prefs.protectedBranches, staleAfter: TimeInterval = Prefs.staleAfter) -> TidyReason? {
         guard !wt.isMain, !wt.isPrunable, !wt.isLocked, let branch = wt.branch,
-              !GitHub.defaultBranches.contains(branch),
+              !protected.contains(branch),
               let status = wt.status, status.isClean, status.ahead == 0
         else { return nil }
         let pr = wt.pullRequest
@@ -50,18 +50,25 @@ extension TidyCandidate {
     }
 
     static func candidates(in repos: [Repo], now: Date = .now) -> [TidyCandidate] {
-        repos.flatMap { repo in
+        let preselectStale = Prefs.preselectStale
+        let protected = Prefs.protectedBranches
+        let staleAfter = Prefs.staleAfter
+        return repos.flatMap { repo in
             repo.worktrees.compactMap { wt in
-                reason(for: wt, now: now).map {
+                reason(for: wt, now: now, protected: protected, staleAfter: staleAfter).map {
                     TidyCandidate(repo: repo, worktree: wt, reason: $0,
-                                  preselected: $0 != .stale && wt.status?.aheadKnown == true)
+                                  preselected: ($0 != .stale || preselectStale) && wt.status?.aheadKnown == true)
                 }
             }
         }
+        // Titles are worked out once each, not on every comparison: turning a branch name into
+        // words is the slow part, and a big setup sorts hundreds of these.
+        .map { (candidate: $0, title: $0.worktree.displayTitle) }
         .sorted {
-            if $0.reason != $1.reason { return $0.reason < $1.reason }
-            return ($0.repo.name, $0.worktree.displayTitle) < ($1.repo.name, $1.worktree.displayTitle)
+            if $0.candidate.reason != $1.candidate.reason { return $0.candidate.reason < $1.candidate.reason }
+            return ($0.candidate.repo.name, $0.title) < ($1.candidate.repo.name, $1.title)
         }
+        .map(\.candidate)
     }
 }
 

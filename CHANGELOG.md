@@ -1,9 +1,20 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (2026-10-22)
 
-- Knows more tools that make worktrees: Codex, Cursor, Windsurf, Conductor, Copilot, Gemini CLI, Sculptor, Superset, Emdash, Vibe Kanban, Container Use and uzi, by folder or branch prefix. A worktree in any other hidden tool folder is tagged with that folder's name.
-- Tidy up with nothing to clean no longer opens an empty sheet: the broom gives a quick sweep and says All tidy (or Checking GitHub… before GitHub has answered).
+- First launch asks where your projects live, instead of assuming ~/Code
+- Redesigned Settings, six pages
+- Tidy up: pick stale days, protect branches, move to Trash
+- GitHub: refresh interval, background checks, notifications
+- Hide tool tags you don't use
+- Menu bar icon and open at login
+- Tells you when a new version is out
+- Signed and notarized: opens with a double-click
+- Install with Homebrew: `brew install --cask antonijap/tap/worktrees`
+- Faster with hundreds of worktrees
+- Warns when git isn't installed
+- Fixed: a branch without a PR no longer counts as a failed lookup
+- Fixed: Settings no longer opens by itself at launch
 
 ## 0.1.0 (2026-10-20)
 
