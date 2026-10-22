@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 (2026-10-22)
+
+- Why it failed is coloured like a terminal: failures red, warnings amber, file locations blue
+- Check for Updates in the Worktrees menu
+- About shows who made it
+
 ## 1.1.0 (2026-10-22)
 
 - A `worktrees` command for your terminal and agents: list, show, tidy, folders, with `--json`

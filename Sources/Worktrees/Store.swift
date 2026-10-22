@@ -66,6 +66,34 @@ final class Store {
         availableUpdate = UpdateCheck.isNewer(latest.version, than: current) ? latest : nil
     }
 
+    enum UpdateAnswer: Equatable {
+        case upToDate(String)
+        case available(UpdateCheck.Release)
+        case cantCheck(String)
+    }
+
+    /// Check for Updates in the menu: asks now, whatever the daily schedule and the setting say,
+    /// since the person asked. Still only through gh.
+    func checkForUpdateNow(current: String? = UpdateCheck.current) async -> UpdateAnswer {
+        guard let current else { return .cantCheck("This build has no version number to compare.") }
+        guard await GitHub.signedIn() else {
+            return .cantCheck("Worktrees checks through gh, and gh isn't signed in. New versions are listed on github.com/antonijap/worktrees/releases.")
+        }
+        guard let latest = await UpdateCheck.latest() else {
+            return .cantCheck("GitHub didn't answer. Try again in a moment.")
+        }
+        if let defaults = Prefs.store {
+            UpdateCheck.save(latest, in: defaults)
+            defaults.set(Date(), forKey: UpdateCheck.lastCheckKey)
+        }
+        guard UpdateCheck.isNewer(latest.version, than: current) else {
+            availableUpdate = nil
+            return .upToDate(current)
+        }
+        availableUpdate = latest
+        return .available(latest)
+    }
+
     /// Whether git could run at the last scan. Without it no repo can be read.
     var gitStatus: GitCheck.Status = .ready
     /// Whether gh had a token at the last GitHub pass. nil until the first one.

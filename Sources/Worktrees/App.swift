@@ -49,6 +49,11 @@ struct WorktreesApp: App {
                 .environment(store)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Worktrees") { About.show() }
+                Button("Check for Updates…") { Task { await UpdatePrompt.run(store: store) } }
+                    .disabled(DemoData.isOn)
+            }
             CommandGroup(after: .appSettings) {
                 Button("Install Command Line Tool…") { CommandLineToolPrompt.run() }
                     .disabled(CommandLineTool.blocker != nil)

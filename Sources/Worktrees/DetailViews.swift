@@ -893,9 +893,9 @@ struct WorktreeDetailView: View {
             Group {
                 switch entry {
                 case .lines(let lines):
-                    Text(verbatim: lines.joined(separator: "\n"))
+                    // Coloured like a terminal; VoiceOver reads the plain text.
+                    Text(LogHighlight.attributed(lines))
                         .font(Font13.mono)
-                        .foregroundStyle(Theme.text)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 case .unavailable:
