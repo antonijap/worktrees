@@ -365,6 +365,7 @@ private struct ReadyStep: View {
             }
             Text("Optional extras, also in Settings.").font(Font13.body).foregroundStyle(Theme.muted)
             VStack(spacing: 0) {
+                CommandRow()
                 ExtraRow(title: "Show in menu bar", note: "With the count that needs attention.", isOn: $menuBarIcon)
                 ExtraRow(title: "Open at login", note: loginProblem, isOn: Binding(get: { loginOn }, set: { on in
                     loginProblem = LoginItem.set(on)
@@ -435,4 +436,51 @@ private struct ExtraRow: View {
         .padding(.vertical, 10)
         .hairline(.bottom)
     }
+}
+
+/// Puts the `worktrees` command on the PATH, right from onboarding. Homebrew users have it already.
+private struct CommandRow: View {
+    @State private var status = CommandLineTool.status()
+    @State private var problem: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("worktrees command").font(Font13.medium).foregroundStyle(Theme.text)
+                Text(problem ?? note).font(Font13.small).foregroundStyle(problem == nil ? Theme.muted : Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            switch status {
+            case .installed, .homebrew:
+                Label { Text("Installed") } icon: { Icon(name: .check, size: 12) }
+                    .font(Font13.small)
+                    .foregroundStyle(Theme.success)
+            case .notInstalled, .elsewhere:
+                Button(status == .notInstalled ? "Install" : "Update") {
+                    problem = CommandLineTool.install()
+                    status = CommandLineTool.status()
+                }
+                .controlSize(.small)
+                .disabled(blocker != nil)
+            case .taken:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .hairline(.bottom)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var note: String {
+        switch status {
+        case .taken(let path): "\(path) is another tool, so it's left alone."
+        case .installed(let path), .homebrew(let path): "At \(path). Try worktrees list --json in a terminal or an agent."
+        default: blocker ?? "For your terminal and agents: worktrees list --json"
+        }
+    }
+
+    /// Snapshots draw the row as a real install sees it.
+    private var blocker: String? { Snapshot.isOn ? nil : CommandLineTool.blocker }
 }

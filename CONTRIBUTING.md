@@ -25,6 +25,8 @@ No middots, em dashes or en dashes anywhere: UI copy, comments, commit messages,
 
 ## Running it
 
+`.build/debug/Worktrees list` (or any command from `worktrees help`) runs the command line tool instead of the app.
+
 ```bash
 swift build
 .build/debug/Worktrees            # bare executable, uses its own defaults domain

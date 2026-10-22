@@ -1,6 +1,9 @@
 import Foundation
 
 enum Scanner {
+    /// The command line tool writes nothing, not even git's index cache.
+    nonisolated(unsafe) static var readOnly = false
+
     /// Walks `root` and returns the main checkout path of every repository found.
     /// A linked worktree (where `.git` is a file) resolves to its main repository,
     /// so each repository shows up once and `git worktree list` fills in the rest.
@@ -156,7 +159,7 @@ enum Scanner {
         // the directory walk on repos that have one.
         let result = await Shell.run("git", ["-C", path, "-c", "core.untrackedCache=true", "-c", "core.quotePath=false",
                                              "status", "--porcelain=v2", "--branch", "--ignore-submodules=dirty", "-z"],
-                                     refreshIndex: true)
+                                     refreshIndex: !readOnly)
         guard result.ok else { return nil }
         return parseStatus(result.out)
     }

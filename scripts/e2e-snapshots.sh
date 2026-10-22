@@ -22,6 +22,8 @@ $B --snapshot "$OUT/overview.png" --real "$ROOT"
 $B --snapshot "$OUT/tidy-default.png" --real "$ROOT" --tidy
 # 7 days, stale ticked, Trash wording, release protected: 3 merged, 1 closed, 3 stale, all ticked.
 $B --snapshot "$OUT/tidy-7days.png" --real "$ROOT" --tidy -staleDays 7 -preselectStale YES -trashOnDelete YES -protectedBranches '(main, release)'
+# One repo's worktrees, grouped like the Overview with the main checkout on top.
+$B --snapshot "$OUT/repo-alpha.png" --real "$ROOT" --folder alpha
 # Claude Code and Codex tags hidden.
 $B --snapshot "$OUT/overview-hidden-tags.png" --real "$ROOT" -hiddenTools '("claude-code", codex)'
 # Scan depth 5 finds deeprepo; skipping sandbox drops sandboxed.

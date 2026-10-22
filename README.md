@@ -36,6 +36,20 @@ Or download the zip from the [latest release](https://github.com/antonijap/workt
 
 For pull requests and checks, install the [GitHub CLI](https://cli.github.com) and run `gh auth login` once.
 
+## Command line
+
+`worktrees` shows the same view in a terminal, and `--json` gives it to scripts and agents. Homebrew installs it; otherwise use Worktrees, Install Command Line Tool.
+
+```bash
+worktrees                  # grouped like the Overview
+worktrees list --attention # only what needs you
+worktrees show feat/login  # one worktree
+worktrees tidy             # what Tidy up would offer
+worktrees list --json      # for scripts and agents
+```
+
+It only reads: nothing is ever changed or deleted from the command line.
+
 ## Shortcuts
 
 | Shortcut | Action |

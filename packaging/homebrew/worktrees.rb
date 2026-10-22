@@ -17,6 +17,7 @@ cask "worktrees" do
   depends_on macos: :sonoma
 
   app "Worktrees.app"
+  binary "#{appdir}/Worktrees.app/Contents/MacOS/Worktrees", target: "worktrees"
 
   zap trash: [
     "~/Library/Preferences/me.apek.worktrees.plist",

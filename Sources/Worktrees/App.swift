@@ -1,7 +1,16 @@
 import AppKit
 import SwiftUI
 
+/// Runs the command line tool when asked for (see CLI), before anything of the app exists:
+/// no store, no file watcher, no window. Otherwise starts the app.
 @main
+enum Entry {
+    static func main() {
+        if CLI.isInvocation() { CLI.runAndExit() }
+        WorktreesApp.main()
+    }
+}
+
 struct WorktreesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     private let store = Store.shared
@@ -40,6 +49,10 @@ struct WorktreesApp: App {
                 .environment(store)
         }
         .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Install Command Line Tool…") { CommandLineToolPrompt.run() }
+                    .disabled(CommandLineTool.blocker != nil)
+            }
             CommandGroup(replacing: .newItem) {
                 // The one window, back after ⌘W.
                 Button("Show Worktrees") { delegate.showWindow() }

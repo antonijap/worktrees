@@ -29,20 +29,19 @@ struct WorktreeColumn: View {
         }
         switch folder {
         case .repo(let id):
+            // The main checkout on top, then the repo's worktrees in the Overview's groups.
             guard let repo = store.repos.first(where: { $0.id == id }) else { return [] }
-            let sorted = repo.worktrees.filter { $0.matches(query) }.sorted {
-                $0.isMain != $1.isMain ? $0.isMain : newestFirst($0, $1)
+            let matching = repo.worktrees.filter { $0.matches(query) }
+            let main = matching.filter(\.isMain).map { (repo: repo, worktree: $0) }
+            let linked = matching.filter { !$0.isMain }.sorted(by: newestFirst).map { (repo: repo, worktree: $0) }
+            let grouped = OverviewGroup.allCases.map { group in
+                ListSection(title: group.title, items: linked.filter { WorktreeState($0.worktree).group == group })
             }
-            return [ListSection(title: nil, items: sorted.map { (repo, $0) })]
+            return ([ListSection(title: nil, items: main)] + grouped).filter { !$0.items.isEmpty }
         case .overview:
-            // Linked worktrees, plus main checkouts with recent work in progress. Old checkouts
-            // with leftover changes would otherwise bury the worktrees that matter.
-            let recent = Date().addingTimeInterval(-14 * 86_400)
             let all = store.repos.flatMap { repo in
                 repo.worktrees
-                    .filter { wt in
-                        !wt.isMain || (WorktreeState(wt).group == .inProgress && (wt.lastCommit?.date ?? .distantPast) > recent)
-                    }
+                    .filter { $0.showsInOverview() }
                     .filter { $0.matches(query) || repo.name.lowercased().contains(query) }
                     .map { (repo: repo, worktree: $0) }
             }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 (2026-10-22)
+
+- A `worktrees` command for your terminal and agents: list, show, tidy, folders, with `--json`
+- Install it from onboarding, the app menu or Settings; Homebrew installs it for you
+- A repo's worktrees are grouped like the Overview, main checkout on top
+
 ## 1.0.0 (2026-10-22)
 
 - First launch asks where your projects live, instead of assuming ~/Code

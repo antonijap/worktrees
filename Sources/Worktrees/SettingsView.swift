@@ -345,6 +345,10 @@ private struct GeneralPane: View {
             }
         }
 
+        SettingsGroup(label: "Command line") {
+            CommandLineRow()
+        }
+
         SettingsGroup(label: "Updates") {
             ToggleRow(
                 label: "Check for updates",
@@ -651,5 +655,74 @@ enum FolderPicker {
         panel.message = "Choose folders that contain your projects, or a single repo."
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return nil }
         return panel.urls
+    }
+}
+
+/// The `worktrees` command: whether it is on the PATH, and a button to add or remove it.
+private struct CommandLineRow: View {
+    @State private var status = CommandLineTool.status()
+    @State private var problem: String?
+
+    var body: some View {
+        SettingsRow(label: title, note: note, warning: problem ?? CommandLineTool.blocker) {
+            switch status {
+            case .installed:
+                Button("Uninstall") { act { CommandLineTool.uninstall() } }
+            case .elsewhere:
+                Button("Update") { act { CommandLineTool.install() } }
+                    .disabled(CommandLineTool.blocker != nil)
+            case .notInstalled:
+                Button("Install") { act { CommandLineTool.install() } }
+                    .disabled(CommandLineTool.blocker != nil)
+            case .taken, .homebrew:
+                EmptyView()
+            }
+        }
+        .onAppear { status = CommandLineTool.status() }
+        // Installed or removed in a terminal meanwhile.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            status = CommandLineTool.status()
+        }
+    }
+
+    private var title: String {
+        switch status {
+        case .installed(let path): "worktrees is at \(path)"
+        case .elsewhere: "worktrees points at another copy of the app"
+        case .taken(let path): "\(path) is another tool"
+        case .homebrew(let path): "worktrees is at \(path), from Homebrew"
+        case .notInstalled: "Install the worktrees command"
+        }
+    }
+
+    private var note: String {
+        "Lists every worktree in a terminal. worktrees list --json gives scripts and agents the same view."
+    }
+
+    private func act(_ action: () -> String?) {
+        problem = action()
+        status = CommandLineTool.status()
+    }
+}
+
+/// The menu command: installs, then says where, or why not.
+enum CommandLineToolPrompt {
+    @MainActor static func run() {
+        let problem = CommandLineTool.install()
+        let alert = NSAlert()
+        if let problem {
+            alert.messageText = "Couldn't install the worktrees command"
+            alert.informativeText = problem
+        } else {
+            let where_: String = {
+                switch CommandLineTool.status() {
+                case .installed(let path), .homebrew(let path): path
+                default: "your PATH"
+                }
+            }()
+            alert.messageText = "worktrees is installed"
+            alert.informativeText = "It's at \(where_). Try worktrees in a terminal, or worktrees list --json for scripts and agents."
+        }
+        alert.runModal()
     }
 }

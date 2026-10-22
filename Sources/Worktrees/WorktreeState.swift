@@ -143,6 +143,14 @@ extension Repo {
 }
 
 extension Worktree {
+    /// Linked worktrees, plus main checkouts with recent work in progress. Old checkouts with
+    /// leftover changes would otherwise bury the worktrees that matter. The Overview and
+    /// `worktrees list` both go by this.
+    func showsInOverview(now: Date = .now) -> Bool {
+        guard isMain else { return true }
+        return WorktreeState(self).group == .inProgress && (lastCommit?.date ?? .distantPast) > now.addingTimeInterval(-14 * 86_400)
+    }
+
     var branchName: BranchName { BranchName(branch ?? "") }
 
     /// What a person would call this worktree: the PR title, else the branch in words.

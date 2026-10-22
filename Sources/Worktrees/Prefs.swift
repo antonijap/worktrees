@@ -48,8 +48,12 @@ enum Prefs {
 
     /// Tests point this at a throwaway suite, so they never read or write the real settings.
     nonisolated(unsafe) static var testStore: UserDefaults?
+    /// The command line tool reads the app's settings domain, wherever it is run from.
+    nonisolated(unsafe) static var cliStore: UserDefaults?
+
     static var store: UserDefaults? {
         if let testStore { return testStore }
+        if let cliStore { return cliStore }
         if TestMode.underTests { return TestMode.inertDefaults }
         return DemoData.isOn ? nil : .standard
     }
