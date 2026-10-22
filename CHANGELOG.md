@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 (2026-10-22)
+
+- Click a section heading to fold it: groups in the worktree list, and Uncommitted, Changes, Commits and Why it failed in the details
+- Folded sections stay folded next time
+
 ## 1.1.1 (2026-10-22)
 
 - Why it failed is coloured like a terminal: failures red, warnings amber, file locations blue

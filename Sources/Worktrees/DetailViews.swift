@@ -72,9 +72,14 @@ struct WorktreeColumn: View {
     var body: some View {
         let groups = self.groups
         let ids = groups.flatMap { $0.items.map(\.worktree.id) }
+        // A folded group keeps its label and count; its worktrees leave the list and the arrow keys.
+        let folded = Folds.shared.folded
         let rows: [ListRow] = groups.flatMap { group -> [ListRow] in
-            (group.title.map { [ListRow.label($0, group.items.count)] } ?? []) + group.items.map { ListRow.item($0.repo, $0.worktree) }
+            let hidden = group.title.map { folded.contains(Folds.list($0)) } ?? false
+            return (group.title.map { [ListRow.label($0, group.items.count)] } ?? [])
+                + (hidden ? [] : group.items.map { ListRow.item($0.repo, $0.worktree) })
         }
+        let visibleIDs = FoldedList.visible(groups: groups.map { ($0.title, $0.items.map(\.worktree.id)) }, folded: folded)
         // Mid-scan the list only grows (arrivals fade in on their own); the reorder comes with
         // the final publish, after scanning has stopped, and again when GitHub's answers regroup rows.
         let still = store.isScanning || store.filter != settledFilter
@@ -106,6 +111,13 @@ struct WorktreeColumn: View {
             ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
+                    if visibleIDs.isEmpty && !ids.isEmpty {
+                        Text(store.filter.isEmpty ? "Every group here is folded." : "Everything that matches is in a folded group.")
+                            .font(Font13.body)
+                            .foregroundStyle(Theme.muted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 12)
+                    }
                     if ids.isEmpty && !store.isScanning {
                         Text(store.filter.isEmpty ? "No worktrees here" : "Nothing matches the filter. Esc clears it.")
                             .font(Font13.body)
@@ -116,8 +128,13 @@ struct WorktreeColumn: View {
                     ForEach(rows) { row in
                         switch row {
                         case .label(let title, let count):
-                            SectionLabel(text: title, count: count)
-                                .motionTransition(.opacity.animation(Motion.quick))
+                            FoldHeading(title: title, key: Folds.list(title), onToggle: { focus.wrappedValue = .list }) {
+                                TickerText(count).font(Font13.small.weight(.medium).monospacedDigit()).foregroundStyle(Theme.muted)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.top, 12)
+                            .padding(.bottom, 3)
+                            .motionTransition(.opacity.animation(Motion.quick))
                         case .item(let repo, let wt):
                             WorktreeListRow(
                                 repo: repo,
@@ -153,8 +170,8 @@ struct WorktreeColumn: View {
             .focusable()
             .focused(focus, equals: .list)
             .focusEffectDisabled()
-            .onKeyPress(.upArrow) { move(-1, in: ids, proxy: proxy) }
-            .onKeyPress(.downArrow) { move(1, in: ids, proxy: proxy) }
+            .onKeyPress(.upArrow) { move(-1, in: visibleIDs, proxy: proxy) }
+            .onKeyPress(.downArrow) { move(1, in: visibleIDs, proxy: proxy) }
             .onKeyPress(.return) {
                 guard let (_, wt) = store.selectedPair, Open.folderEditor != nil, !wt.isPrunable else { return .ignored }
                 Sounds.play(.open)
@@ -170,9 +187,11 @@ struct WorktreeColumn: View {
 
             StatusFooter()
         }
-        .onAppear { keepSelection(old: [], new: ids) }
-        .onChange(of: folder) { store.selectedID = ids.first }
-        .onChange(of: ids) { old, new in keepSelection(old: old, new: new) }
+        // Selection follows what shows: a row whose group folds hands it to its neighbour, so
+        // ⌘⌫ never acts on a worktree that can't be seen.
+        .onAppear { keepSelection(old: [], new: visibleIDs) }
+        .onChange(of: folder) { store.selectedID = visibleIDs.first }
+        .onChange(of: visibleIDs) { old, new in keepSelection(old: old, new: new) }
     }
 
     private func move(_ step: Int, in ids: [String], proxy: ScrollViewProxy) -> KeyPress.Result {
@@ -188,16 +207,8 @@ struct WorktreeColumn: View {
     /// Keeps the selection when it's still listed. When the selected worktree goes away
     /// (deleted, filtered out), selects the row that took its place rather than jumping to the top.
     private func keepSelection(old: [String], new: [String]) {
-        guard let selected = store.selectedID else {
-            store.selectedID = new.first
-            return
-        }
-        guard !new.contains(selected) else { return }
-        if let index = old.firstIndex(of: selected), !new.isEmpty {
-            store.selectedID = new[min(index, new.count - 1)]
-        } else {
-            store.selectedID = new.first
-        }
+        let next = FoldedList.selection(store.selectedID, old: old, new: new)
+        if next != store.selectedID { store.selectedID = next }
     }
 }
 
@@ -546,7 +557,6 @@ struct WorktreeDetailView: View {
     @State private var loadCount = 0
     @State private var showLoading = false
     @State private var failingHovered = false
-    @State private var whyExpanded = !Snapshot.whyCollapsed
 
     private var state: WorktreeState { WorktreeState(worktree) }
 
@@ -842,24 +852,10 @@ struct WorktreeDetailView: View {
         let runs = actionsRuns
         if !runs.isEmpty, let slug = repo.githubRemote?.githubSlug {
             VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    Motion.instantly { whyExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 6) {
-                        Icon(name: .chevronRight, size: 12)
-                            .foregroundStyle(Theme.muted)
-                            .rotationEffect(.degrees(whyExpanded ? 90 : 0))
-                        Text("Why it failed").font(Font13.medium).foregroundStyle(Theme.text)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Why it failed")
-                .accessibilityValue(whyExpanded ? "expanded" : "collapsed")
-                .accessibilityAddTraits(.isHeader)
+                FoldHeading(title: "Why it failed", key: Folds.detail("why"), style: .title)
                 // The panel appears and goes at once; the sections below jump with it.
                 VStack(spacing: 0) {
-                    if whyExpanded {
+                    if !Folds.shared.isFolded(Folds.detail("why")) {
                         VStack(spacing: 0) {
                             ForEach(Array(runs.enumerated()), id: \.element.runID) { index, run in
                                 logExcerpt(run.check, runID: run.runID)
@@ -1041,7 +1037,7 @@ struct WorktreeDetailView: View {
     }
 
     private func uncommittedSection(_ d: WorktreeDetails) -> some View {
-        Section(title: "Uncommitted", trailing: Text(verbatim: "\(d.uncommitted.count)")) {
+        Section(title: "Uncommitted", fold: "uncommitted", trailing: Text(verbatim: "\(d.uncommitted.count)")) {
             if d.uncommitted.isEmpty { EmptyRow(text: "Nothing uncommitted") }
             CappedList(items: d.uncommitted, what: "files", expanded: isExpanded("uncommitted")) { file in
                 let key = "uncommitted:\(file.path)"
@@ -1058,7 +1054,7 @@ struct WorktreeDetailView: View {
 
     private func changesSection(_ d: WorktreeDetails) -> some View {
         let base = d.base ?? "the default branch"
-        return Section(title: "Changes since \(base)", trailing: diffStat(d.added, d.removed)) {
+        return Section(title: "Changes since \(base)", fold: "changes", trailing: diffStat(d.added, d.removed)) {
             if d.changes.isEmpty { EmptyRow(text: "No changes since \(base)") }
             CappedList(items: d.changes, what: "files", expanded: isExpanded("changes")) { file in
                 let key = "changes:\(file.path)"
@@ -1102,6 +1098,7 @@ struct WorktreeDetailView: View {
     private func commitsSection(_ d: WorktreeDetails) -> some View {
         Section(
             title: worktree.isMain ? "Recent commits" : "Commits on this branch",
+            fold: "commits",
             trailing: Text(verbatim: "\(d.commits.count)")
         ) {
             if d.commits.isEmpty { EmptyRow(text: "No commits on this branch yet") }
@@ -1154,22 +1151,26 @@ struct WorktreeDetailView: View {
 
 // MARK: - Building blocks
 
+/// A titled panel in the details column. The title folds it; the fold is remembered for every
+/// worktree, so a section someone never reads stays out of the way.
 private struct Section<Content: View>: View {
     let title: String
+    /// Stable name for the fold, the same whatever the title says.
+    let fold: String
     let trailing: Text
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        let key = Folds.detail(fold)
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(title).font(Font13.medium).foregroundStyle(Theme.text)
+            FoldHeading(title: title, key: key, style: .title) {
                 trailing.font(Font13.small.monospacedDigit()).foregroundColor(Theme.muted)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-            VStack(spacing: 0) { content() }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .panel()
+            if !Folds.shared.isFolded(key) {
+                VStack(spacing: 0) { content() }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .panel()
+            }
         }
     }
 }

@@ -78,6 +78,9 @@ enum Snapshot {
         NSApplication.shared.setActivationPolicy(.prohibited)
         NSApplication.shared.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
 
+        // `--fold "list:In progress,detail:uncommitted"`: those sections drawn folded.
+        if let keys = value("--fold") { Folds.shared.fold(keys.split(separator: ",").map(String.init)) }
+        if whyCollapsed { Folds.shared.fold([Folds.detail("why")]) }
         let store = Store()
         Task { await store.refresh() }
         // A real folder also waits for its GitHub pass, which follows the scan straight away.
